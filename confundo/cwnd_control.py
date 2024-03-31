@@ -1,27 +1,23 @@
-# -*- Mode: python; py-indent-offset: 4; indent-tabs-mode: nil; coding: utf-8; -*-
-# Copyright 2019 Alex Afanasyev
-#
-
-from .common import *
+from .common import MTU, INIT_SSTHRESH
 
 class CwndControl:
-    '''Interface for the congestio control actions'''
+    '''Interface for the congestion control actions'''
 
     def __init__(self):
-        self.cwnd = 1.0 * MTU
-        self.ssthresh = INIT_SSTHRESH
+        self.cwnd = 1.0 * MTU  # Initial congestion window size
+        self.ssthresh = INIT_SSTHRESH  # Initial slow start threshold
 
     def on_ack(self, ackedDataLen):
-        #
-        # IMPLEMENT this and call this method in approprite place inside confundo/socket.py
-        #
-        pass
+        # Adjust congestion window size and slow start threshold based on the acknowledgment
+        if self.cwnd < self.ssthresh:
+            # Slow start phase
+            self.cwnd += ackedDataLen
+        else:
+            # Congestion avoidance phase
+            self.cwnd += (MTU * MTU) // self.cwnd
 
     def on_timeout(self):
-        #
-        # IMPLEMENT this and call this method in approprite place inside confundo/socket.py
-        #
-        pass
+        # Reduce congestion window size and set slow start threshold after a timeout
+        self.ssthresh = max(self.cwnd / 2, INIT_SSTHRESH)  # Set slow start threshold to half of current window size or to initial threshold
+        self.cwnd = 1.0 * MTU  # Reset congestion window size to 1 MTU after timeout
 
-    def __str__(self):
-        return f"cwnd:{self.cwnd} ssthreash:{self.ssthresh}"

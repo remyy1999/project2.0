@@ -1,21 +1,24 @@
-# -*- Mode: python; py-indent-offset: 4; indent-tabs-mode: nil; coding: utf-8; -*-
-# Copyright 2019 Alex Afanasyev
-#
-
 from .header import Header
 
 class Packet(Header):
     '''Abstraction to handle the whole Confundo packet (e.g., with payload, if present)'''
 
-    def __init__(self, seqNum=0, ackNum=0, connId=0, flags=0, payload=b"", **kwargs):
-        super(Packet, self).__init__(seqNum=seqNum, ackNum=ackNum, connId=connId, flags=flags, **kwargs)
+    # Define flags as class attributes
+    FLAG_SYN = "SYN"
+    FLAG_ACK = "ACK"
+    FLAG_FIN = "FIN"
+
+    def __init__(self, payload=b"", flags=None, isDup=False, **kwargs):
+        super(Packet, self).__init__(**kwargs)
         self.payload = payload
+        self.flags = flags
+        self.isDup = isDup # only for printing flags
 
     def decode(self, fullPacket):
-        super(Packet, self).decode(fullPacket[:12])
+        super(Packet, self).decode(fullPacket[0:12])
         self.payload = fullPacket[12:]
         return self
 
     def encode(self):
-        header = super(Packet, self).encode()
-        return header + self.payload
+        return super(Packet, self).encode() + self.payload
+

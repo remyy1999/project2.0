@@ -5,6 +5,8 @@ import time
 
 from enum import Enum
 from .common import *
+from .cwnd_control import CwndControl  # Import the congestion control class
+from .packet import Packet
 
 class State(Enum):
     INVALID = 0
@@ -32,7 +34,7 @@ class Socket:
         self.inSeq = inSeq
 
         self.lastAckTime = time.time() 
-        self.cc = CwndControl()
+        self.cc = CwndControl()  # Initialize congestion control instance
         self.outBuffer = b""
         self.inBuffer = b""
         self.state = State.INVALID
@@ -140,6 +142,10 @@ class Socket:
         if outPkt:
             self._send(outPkt)
 
+        # Call on_ack method after receiving acknowledgment
+        if inPkt.isAck:
+            self.cc.on_ack(len(inPkt.payload))  # Update congestion control with acknowledged data length
+
         return inPkt
 
     def _connect(self, remote):
@@ -222,6 +228,7 @@ class Socket:
                 self.outBuffer = self.outBuffer[advanceAmount:]
                 self.seqNum += advanceAmount
             if time.time() - startTime > GLOBAL_TIMEOUT:
+                self.cc.on_timeout()  # Adjust congestion control parameters
                 self.state = State.ERROR
                 raise RuntimeError("timeout")
         return len(data)
