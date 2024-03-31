@@ -21,12 +21,35 @@ TIMEOUT = 10  # Timeout in seconds
 CWND_INITIAL = 412
 SS_THRESH_INITIAL = 12000
 
-def send_packet(sock, packet):
-    sock.sendto(packet.encode(), (args.host, args.port))
+def send_packet(sock, packet, cwnd, ss_thresh):
+    packet_str = packet.encode()
+    sock.sendto(packet_str, (args.host, args.port))
+    flags = ""
+    if packet.isAck():
+        flags += " ACK"
+    if packet.isSyn():
+        flags += " SYN"
+    if packet.isFin():
+        flags += " FIN"
+    if packet.isDup():
+        flags += " DUP"
+    print(f"SEND {packet.seqNum} {packet.ackNum} {packet.connId} {cwnd} {ss_thresh}{flags}")
 
-def receive_packet(sock):
+def receive_packet(sock, cwnd, ss_thresh):
     data, _ = sock.recvfrom(1024)
-    return Packet().decode(data)
+    packet = Packet().decode(data)
+    flags = ""
+    if packet.isAck():
+        flags += " ACK"
+    if packet.isSyn():
+        flags += " SYN"
+    if packet.isFin():
+        flags += " FIN"
+    if packet.connId == 0:  # Unknown connection ID, packet dropped
+        print(f"DROP {packet.seqNum} {packet.ackNum} {packet.connId}{flags}")
+    else:
+        print(f"RECV {packet.seqNum} {packet.ackNum} {packet.connId} {cwnd} {ss_thresh}{flags}")
+    return packet
 
 def start():
     try:
@@ -43,17 +66,17 @@ def start():
 
         # Step 1: Send SYN packet
         syn_packet = Packet(seqNum=seq_num, ackNum=0, connId=0, flags=Packet.FLAG_SYN)
-        send_packet(sock, syn_packet)
+        send_packet(sock, syn_packet, cwnd, ss_thresh)
 
         # Step 2: Receive SYN | ACK response
-        syn_ack_packet = receive_packet(sock)
+        syn_ack_packet = receive_packet(sock, cwnd, ss_thresh)
         if syn_ack_packet.isSynAck():
             conn_id = syn_ack_packet.connId
             seq_num += 1
             
             # Step 3: Send ACK packet
             ack_packet = Packet(seqNum=seq_num, ackNum=syn_ack_packet.seqNum + 1, connId=conn_id, flags=Packet.FLAG_ACK)
-            send_packet(sock, ack_packet)
+            send_packet(sock, ack_packet, cwnd, ss_thresh)
 
             # Step 4: Send file data in chunks
             with open(args.file, "rb") as f:
@@ -64,13 +87,13 @@ def start():
 
                     # Send data packet with ACK flag
                     data_packet = Packet(seqNum=seq_num, ackNum=syn_ack_packet.seqNum + 1, connId=conn_id, flags=Packet.FLAG_ACK, payload=data)
-                    send_packet(sock, data_packet)
+                    send_packet(sock, data_packet, cwnd, ss_thresh)
                     
                     # Increment sequence number
                     seq_num += len(data)
 
                     # Congestion control adjustments after each ACK
-                    ack_packet = receive_packet(sock)
+                    ack_packet = receive_packet(sock, cwnd, ss_thresh)
                     if ack_packet.isAck():
                         if cwnd < ss_thresh:
                             cwnd += CHUNK_SIZE
