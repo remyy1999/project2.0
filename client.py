@@ -13,20 +13,23 @@ parser.add_argument("port", help="Set Port Number", type=int)
 parser.add_argument("file", help="Set File Directory")
 args = parser.parse_args()
 
+def send_message(sock, message):
+    # Prefix each message with its length
+    message_length = len(message).to_bytes(4, byteorder='big')
+    sock.sendall(message_length + message)
+
 def start():
     try:
         with confundo.Socket() as sock:
             sock.settimeout(10)
-            sock.connect((args.host, int(args.port)))
+            sock.connect((args.host, args.port))
 
             with open(args.file, "rb") as f:
-                data = f.read(50000)
-                while data:
-                    total_sent = 0
-                    while total_sent < len(data):
-                        sent = sock.send(data[total_sent:])
-                        total_sent += sent
-                        data = f.read(50000)
+                while True:
+                    data = f.read(4096)  # Read 4096 bytes at a time
+                    if not data:
+                        break  # End of file
+                    send_message(sock, data)
     except RuntimeError as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
