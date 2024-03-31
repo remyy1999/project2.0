@@ -1,17 +1,10 @@
+import struct
 import socket
 import sys
 import time
 
 from enum import Enum
 from .common import *
-from .packet import Packet
-from .cwnd_control import CwndControl
-from .util import *
-
-# Define congestion control constants
-INITIAL_CWND = 1
-INITIAL_SSTHRESH = 16
-MIN_SSTHRESH = 2
 
 class State(Enum):
     INVALID = 0
@@ -32,9 +25,10 @@ class Socket:
         self.sock.settimeout(0.5)
         self.timeout = 10
 
-        self.base = 12345
+        self.base = 50000
         self.seqNum = self.base
-
+        self.max_seqNum = 50000
+        self.ackNum = 0
         self.inSeq = inSeq
 
         self.lastAckTime = time.time() 
@@ -51,8 +45,8 @@ class Socket:
         self.noClose = noClose
 
         # Initialize congestion control parameters
-        self.cwnd = INITIAL_CWND  # Initial congestion window size
-        self.ssthresh = INITIAL_SSTHRESH  # Initial slow start threshold
+        self.cwnd = 412  # Initial congestion window size
+        self.ssthresh = 12000  # Initial slow start threshold
         self.dup_acks = 0  # Number of duplicate acknowledgments
 
         # Sliding window parameters
@@ -60,15 +54,6 @@ class Socket:
         self.max_window_size = 10  # Maximum window size
         self.next_seq_num = self.base  # Next sequence number to send
         self.last_acked_seq_num = self.base  # Last acknowledged sequence number
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        if self.state == State.OPEN:
-            self.close()
-        if not self.noClose:
-            self.sock.close()
 
     def connect(self, endpoint):
         remote = socket.getaddrinfo(endpoint[0], endpoint[1], family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -97,13 +82,16 @@ class Socket:
 
         hadNewConnId = True
         while True:
+            # just wait forever until a new connection arrives
+
             if hadNewConnId:
-                self.connId += 1
+                self.connId += 1 # use it for counting incoming connections, no other uses really
                 hadNewConnId = False
             pkt = self._recv()
             if pkt and pkt.isSyn:
                 hadNewConnId = True
-                clientSock = Socket(connId=self.connId, synReceived=True, sock=self.sock, inSeq=pkt.seqNum, noClose=True)
+                ### UPDATE CORRECTLY HERE
+                clientSock = Socket(connId=self.connId, synReceived=True, sock=self.sock, inSeq=0, noClose=True)
                 clientSock._connect(self.lastFromAddr)
                 return clientSock
 
@@ -111,12 +99,16 @@ class Socket:
         self.timeout = timeout
 
     def _send(self, packet):
+        '''"Private" method to send packet out'''
+
         if self.remote:
             self.sock.sendto(packet.encode(), self.remote)
         else:
             self.sock.sendto(packet.encode(), self.lastFromAddr)
 
     def _recv(self):
+        '''"Private" method to receive incoming packets'''
+
         try:
             (inPacket, self.lastFromAddr) = self.sock.recvfrom(1024)
         except socket.error as e:
@@ -126,13 +118,16 @@ class Socket:
 
         outPkt = None
         if inPkt.isSyn:
-            self.connId = inPkt.connId
+            if inPkt.connId != 0:
+                self.connId = inPkt.connId
             self.synReceived = True
-            outPkt = Packet(seqNum=self.seqNum, ackNum=inPkt.seqNum, connId=self.connId, isAck=True)
+            outPkt = Packet(seqNum=self.seqNum, ackNum=self.inSeq, connId=self.connId, isAck=True)
 
         elif inPkt.isFin:
-            self.finReceived = True
-            outPkt = Packet(seqNum=self.seqNum, ackNum=inPkt.seqNum, connId=self.connId, isAck=True)
+            if self.inSeq == inPkt.seqNum:
+                self.finReceived = True
+
+            outPkt = Packet(seqNum=self.seqNum, ackNum=self.inSeq, connId=self.connId, isAck=True)
 
         elif len(inPkt.payload) > 0:
             if not self.synReceived:
@@ -179,8 +174,8 @@ class Socket:
                 raise RuntimeError("timeout")
 
     def sendFinPacket(self):
-        finPkt = Packet(seqNum=self.seqNum, connId=self.connId, isFin=True)
-        self._send(finPkt)
+        synPkt = Packet(seqNum=self.seqNum, connId=self.connId, isFin=True)
+        self._send(synPkt)
 
     def expectFinAck(self):
         startTime = time.time()
@@ -210,35 +205,24 @@ class Socket:
 
     def send(self, data):
         if self.state != State.OPEN:
-            raise RuntimeError("Trying to send data, but socket is not in OPEN state")
-
+            raise RuntimeError("Trying to send FIN, but socket is not in OPEN state")
         self.outBuffer += data
-
-        while self.next_seq_num - self.base < self.cwnd and len(self.outBuffer) > 0:
-            toSend = self.outBuffer[:MTU]
-            pkt = Packet(seqNum=self.next_seq_num, connId=self.connId, payload=toSend)
-            self._send(pkt)
-            self.send_window.append(pkt)
-            self.next_seq_num += len(toSend)
-            self.outBuffer = self.outBuffer[len(toSend):]
-
         startTime = time.time()
-        while self.send_window:
-            pkt = self._recv()
+        while len(self.outBuffer) > 0:
+            toSend = self.outBuffer[:MTU]
+            pkt = Packet(seqNum=self.seqNum, connId=self.connId, payload=toSend)
+            self._send(pkt)
+            pkt = self._recv() 
             if pkt and pkt.isAck:
-                acked_pkt = next((p for p in self.send_window if p.seqNum == pkt.ackNum), None)
-                if acked_pkt:
-                    self.send_window.remove(acked_pkt)
-                    self.last_acked_seq_num = max(self.last_acked_seq_num, acked_pkt.seqNum)
-                    self.base = self.last_acked_seq_num + 1
-                    # Update congestion window based on congestion control algorithm
-                    # For example, in TCP Tahoe:
-                    if self.cwnd < self.ssthresh:
-                        self.cwnd += 1  # Slow start phase
-                    else:
-                        self.cwnd += 1 / self.cwnd  # Congestion avoidance phase
+                advanceAmount = pkt.ackNum - self.seqNum
+                if advanceAmount == 0:
+                    self.nDupAcks += 1
+                else:
+                    self.nDupAcks = 0
+                self.outBuffer = self.outBuffer[advanceAmount:]
+                self.seqNum += advanceAmount
             if time.time() - startTime > GLOBAL_TIMEOUT:
                 self.state = State.ERROR
                 raise RuntimeError("timeout")
-
         return len(data)
+
