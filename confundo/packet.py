@@ -7,15 +7,15 @@ from .header import Header
 class Packet(Header):
     '''Abstraction to handle the whole Confundo packet (e.g., with payload, if present)'''
 
-    def __init__(self, payload=b"", isDup=False, **kwargs):
-        super(Packet, self).__init__(**kwargs)
+    def __init__(self, seqNum=0, ackNum=0, connId=0, flags=0, payload=b"", **kwargs):
+        super(Packet, self).__init__(seqNum=seqNum, ackNum=ackNum, connId=connId, flags=flags, **kwargs)
         self.payload = payload
-        self.isDup = isDup # only for printing flags
 
     def decode(self, fullPacket):
-        super(Packet, self).decode(fullPacket[0:12])
+        super(Packet, self).decode(fullPacket[:12])
         self.payload = fullPacket[12:]
         return self
 
     def encode(self):
-        return super(Packet, self).encode() + self.payload
+        header = super(Packet, self).encode()
+        return header + self.payload
