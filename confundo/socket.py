@@ -8,6 +8,11 @@ from .packet import Packet
 from .cwnd_control import CwndControl
 from .util import *
 
+# Define congestion control constants
+INITIAL_CWND = 1
+INITIAL_SSTHRESH = 16
+MIN_SSTHRESH = 2
+
 class State(Enum):
     INVALID = 0
     SYN = 1
@@ -44,6 +49,11 @@ class Socket:
 
         self.remote = None
         self.noClose = noClose
+
+        # Initialize congestion control parameters
+        self.cwnd = INITIAL_CWND  # Initial congestion window size
+        self.ssthresh = INITIAL_SSTHRESH  # Initial slow start threshold
+        self.dup_acks = 0  # Number of duplicate acknowledgments
 
     def __enter__(self):
         return self
@@ -208,7 +218,13 @@ class Socket:
             if pkt and pkt.isAck:
                 if pkt.ackNum == self.seqNum:
                     self.base = self.seqNum
-                    self.outBuffer = self.outBuffer[len(toSend):]
+                    self.dup_acks = 0
+                    # Update congestion window based on congestion control algorithm
+                    # For example, in TCP Tahoe:
+                    if self.cwnd < self.ssthresh:
+                        self.cwnd += 1  # Slow start phase
+                    else:
+                        self.cwnd += 1 / self.cwnd  # Congestion avoidance phase
             if time.time() - startTime > GLOBAL_TIMEOUT:
                 self.state = State.ERROR
                 raise RuntimeError("timeout")
