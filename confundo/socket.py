@@ -55,6 +55,12 @@ class Socket:
         self.ssthresh = INITIAL_SSTHRESH  # Initial slow start threshold
         self.dup_acks = 0  # Number of duplicate acknowledgments
 
+        # Sliding window parameters
+        self.send_window = []  # Stores packets in transit
+        self.max_window_size = 10  # Maximum window size
+        self.next_seq_num = self.base  # Next sequence number to send
+        self.last_acked_seq_num = self.base  # Last acknowledged sequence number
+
     def __enter__(self):
         return self
 
@@ -208,17 +214,23 @@ class Socket:
 
         self.outBuffer += data
 
-        startTime = time.time()
-        while len(self.outBuffer) > 0:
+        while self.next_seq_num - self.base < self.cwnd and len(self.outBuffer) > 0:
             toSend = self.outBuffer[:MTU]
-            pkt = Packet(seqNum=self.seqNum, connId=self.connId, payload=toSend)
+            pkt = Packet(seqNum=self.next_seq_num, connId=self.connId, payload=toSend)
             self._send(pkt)
+            self.send_window.append(pkt)
+            self.next_seq_num += len(toSend)
+            self.outBuffer = self.outBuffer[len(toSend):]
 
+        startTime = time.time()
+        while self.send_window:
             pkt = self._recv()
             if pkt and pkt.isAck:
-                if pkt.ackNum == self.seqNum:
-                    self.base = self.seqNum
-                    self.dup_acks = 0
+                acked_pkt = next((p for p in self.send_window if p.seqNum == pkt.ackNum), None)
+                if acked_pkt:
+                    self.send_window.remove(acked_pkt)
+                    self.last_acked_seq_num = max(self.last_acked_seq_num, acked_pkt.seqNum)
+                    self.base = self.last_acked_seq_num + 1
                     # Update congestion window based on congestion control algorithm
                     # For example, in TCP Tahoe:
                     if self.cwnd < self.ssthresh:
